@@ -81,7 +81,7 @@ export function SplashScreen() {
             className="text-5xl"
             style={{ fontFamily: "Poppins, sans-serif" }}
           >
-            ai
+            Ai
             <span
               style={{
                 background: "linear-gradient(to right, white, #E85A2A)",

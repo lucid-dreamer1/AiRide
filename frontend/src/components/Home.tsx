@@ -188,7 +188,7 @@ export function Home({
       {/* Header */}
       <div className="px-6 py-4 flex items-center justify-between">
         <h1 style={{ fontFamily: "Poppins, sans-serif" }}>
-          ai<span className="text-[#E85A2A]">Ride</span>
+          Ai<span className="text-[#E85A2A]">Ride</span>
         </h1>
         <div className="flex items-center gap-2">
           {isBluetoothConnected ? (
