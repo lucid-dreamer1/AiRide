@@ -55,46 +55,44 @@ export function Home({
   }, [preloadedRoute]);
 
   // Ottieni info percorso dal backend
- // Ottieni info percorso dal backend
-useEffect(() => {
-  if (!from || !to) return;
-  const controller = new AbortController();
+  // Ottieni info percorso dal backend
+  useEffect(() => {
+    if (!from || !to) return;
+    const controller = new AbortController();
 
-  async function fetchRoute() {
-    try {
-      const res = await fetch(
-        `http://localhost:5000/route_info?start=${encodeURIComponent(from)}&end=${encodeURIComponent(to)}`,
-        { signal: controller.signal }
-      );
+    async function fetchRoute() {
+      try {
+        const res = await fetch(`/route_info?start=${encodeURIComponent(from)}&end=${encodeURIComponent(to)}`)
+;
 
-      const data = await res.json();
+        const data = await res.json();
 
-      if (res.ok) {
-        setRouteInfo({ duration: data.duration, distance: data.distance });
+        if (res.ok) {
+          setRouteInfo({ duration: data.duration, distance: data.distance });
 
-        if (data.coordinates && data.coordinates.length > 0) {
-          const coords = data.coordinates.map(
-            (p: { lat: number; lon: number }) =>
-              [p.lat, p.lon] as [number, number]
-          );
-          setRouteCoords(coords);
+          if (data.coordinates && data.coordinates.length > 0) {
+            const coords = data.coordinates.map(
+              (p: { lat: number; lon: number }) =>
+                [p.lat, p.lon] as [number, number]
+            );
+            setRouteCoords(coords);
+          } else {
+            setRouteCoords([]);
+          }
         } else {
+          toast.error(data.error || "Errore ottenendo percorso");
           setRouteCoords([]);
         }
-      } else {
-        toast.error(data.error || "Errore ottenendo percorso");
+      } catch (err) {
+        console.error(err);
+        setRouteInfo({ duration: "—", distance: "—" });
         setRouteCoords([]);
       }
-    } catch (err) {
-      console.error(err);
-      setRouteInfo({ duration: "—", distance: "—" });
-      setRouteCoords([]);
     }
-  }
 
-  fetchRoute();
-  return () => controller.abort();
-}, [from, to]);
+    fetchRoute();
+    return () => controller.abort();
+  }, [from, to]);
 
   // 🔹 Gestione GPS Reale
   useEffect(() => {
@@ -266,6 +264,7 @@ useEffect(() => {
               data={{
                 type: "Feature",
                 geometry: { type: "LineString", coordinates: completedPath },
+                properties: {}, // ✅ aggiungi questa riga
               }}
             >
               <Layer
