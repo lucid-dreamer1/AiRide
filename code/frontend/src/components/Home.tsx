@@ -49,7 +49,12 @@ export function Home({
 
   const [routeFetched, setRouteFetched] = useState(false);
   const mapRef = useRef<any>(null);
-  const lastIndexRef = useRef(0); // Stabilizza progresso
+  const lastIndexRef = useRef(0);
+
+  // --- Refs per calcolo velocità e durata iniziale ---
+  const lastPositionRef = useRef<[number, number] | null>(null);
+  const lastTimeRef = useRef<number | null>(null);
+  const initialDurationRef = useRef<string>("—"); // <-- durata iniziale
 
   // Ripulisce percorso solo se la destinazione viene cancellata
   useEffect(() => {
@@ -59,12 +64,13 @@ export function Home({
       setCompletedPath([]);
       setRouteFetched(false);
       lastIndexRef.current = 0;
+      initialDurationRef.current = "—";
     } else if (!routeFetched) {
-      setRouteFetched(false); // forza fetch se non già fatto
+      setRouteFetched(false);
     }
   }, [to]);
 
-  // Fetch route quando GPS ha rilevato posizione e c'è destinazione
+  // Fetch route
   useEffect(() => {
     if (!autoFrom || !to) return;
     if (routeFetched) return;
@@ -83,6 +89,7 @@ export function Home({
         const data = await res.json();
         if (res.ok) {
           setRouteInfo({ duration: data.duration, distance: data.distance });
+          if (data.duration) initialDurationRef.current = data.duration; // <-- salva durata iniziale
           if (data.coordinates && data.coordinates.length > 0) {
             const coords = data.coordinates.map(
               (p: { lat: number; lon: number }) =>
@@ -108,6 +115,45 @@ export function Home({
     return () => controller.abort();
   }, [autoFrom, to, routeFetched]);
 
+  // --- Funzione Haversine ---
+  function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
+    const R = 6371e3;
+    const φ1 = (lat1 * Math.PI) / 180;
+    const φ2 = (lat2 * Math.PI) / 180;
+    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(Δφ / 2) ** 2 +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  // --- Calcolo distanza residua ---
+  function computeRemainingDistance(
+    currentPos: [number, number],
+    route: [number, number][]
+  ) {
+    let distance = 0;
+    let startAdding = false;
+
+    for (let i = 0; i < route.length - 1; i++) {
+      const [lat1, lon1] = route[i];
+      const [lat2, lon2] = route[i + 1];
+
+      if (!startAdding) {
+        const d = haversine(currentPos[0], currentPos[1], lat1, lon1);
+        if (d < 40) startAdding = true;
+      }
+
+      if (startAdding) {
+        distance += haversine(lat1, lon1, lat2, lon2);
+      }
+    }
+
+    return distance; // metri
+  }
+
   // Gestione posizione GPS
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -127,7 +173,6 @@ export function Home({
         if (from === "Rilevamento posizione..." || from === "")
           setFrom("La tua posizione attuale");
 
-        // Centra mappa su posizione corrente
         if (mapRef.current?.getMap) {
           mapRef.current.getMap().flyTo({
             center: [lon, lat],
@@ -137,47 +182,38 @@ export function Home({
           });
         }
 
-        // Aggiorna percorso completato con distanza Haversine
         if (routeCoords.length > 0) {
-          function haversine(
-            lat1: number,
-            lon1: number,
-            lat2: number,
-            lon2: number
-          ) {
-            const R = 6371e3;
-            const φ1 = (lat1 * Math.PI) / 180;
-            const φ2 = (lat2 * Math.PI) / 180;
-            const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-            const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-            const a =
-              Math.sin(Δφ / 2) ** 2 +
-              Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-            return R * c;
+          const remainingDistance = computeRemainingDistance(
+            [lat, lon],
+            routeCoords
+          );
+
+          const now = Date.now();
+          let speed = 0;
+
+          if (lastPositionRef.current && lastTimeRef.current) {
+            const [latPrev, lonPrev] = lastPositionRef.current;
+            const deltaT = (now - lastTimeRef.current) / 1000;
+            const deltaD = haversine(latPrev, lonPrev, lat, lon);
+            speed = deltaD / deltaT;
           }
 
-          let minDist = Infinity;
-          let nearestIndex = -1;
+          lastPositionRef.current = [lat, lon];
+          lastTimeRef.current = now;
 
-          routeCoords.forEach(([rLat, rLon], i) => {
-            const d = haversine(lat, lon, rLat, rLon);
-            if (d < minDist) {
-              minDist = d;
-              nearestIndex = i;
-            }
+          const MIN_SPEED = 0.5; // m/s ≈ 1.8 km/h
+          let remainingDuration = initialDurationRef.current; // durata iniziale
+
+          // Aggiorna durata solo se la velocità è sufficiente
+          if (speed >= MIN_SPEED) {
+            const minutes = Math.round(remainingDistance / speed / 60);
+            remainingDuration = `${minutes} min`;
+          }
+
+          setRouteInfo({
+            distance: `${(remainingDistance / 1000).toFixed(2)} km`,
+            duration: remainingDuration,
           });
-
-          if (nearestIndex !== -1 && minDist < 40) {
-            if (nearestIndex > lastIndexRef.current) {
-              lastIndexRef.current = nearestIndex;
-              setCompletedPath(
-                routeCoords
-                  .slice(0, nearestIndex + 1)
-                  .map(([lat, lon]) => [lon, lat])
-              );
-            }
-          }
         }
       },
       (err) => {
@@ -231,7 +267,6 @@ export function Home({
     "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
   const MAP_STYLE_DARK =
     "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
-
   return (
     <div className="h-full flex flex-col pb-20">
       {/* Header */}
