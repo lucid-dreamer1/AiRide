@@ -1,13 +1,17 @@
-import { useState, useEffect } from 'react';
-import { SplashScreen } from './components/SplashScreen';
-import { Home } from './components/Home';
-import { History } from './components/History';
-import { Settings } from './components/Settings';
-import { Navbar } from './components/Navbar';
-import { Toaster } from './components/ui/sonner';
-import { motion, AnimatePresence } from 'motion/react';
+import { useState, useEffect } from "react";
+import { SplashScreen } from "./components/SplashScreen";
+import { Home } from "./components/Home";
+import { History } from "./components/History";
+import { Settings } from "./components/Settings";
+import { Navbar } from "./components/Navbar";
+import { Toaster } from "./components/ui/sonner";
+import { motion, AnimatePresence } from "motion/react";
+import {
+  NavigationProvider,
+  useNavigation,
+} from "./components/NavigationContext";
 
-export type Screen = 'splash' | 'home' | 'history' | 'settings';
+export type Screen = "splash" | "home" | "history" | "settings";
 
 export interface Route {
   from: string;
@@ -17,46 +21,53 @@ export interface Route {
   date: string;
 }
 
-function App() {
-  const [currentScreen, setCurrentScreen] = useState<Screen>('splash');
+function AppContent() {
+  const [currentScreen, setCurrentScreen] = useState<Screen>("splash");
   const [isBluetoothConnected, setIsBluetoothConnected] = useState(true);
   const [routes, setRoutes] = useState<Route[]>([
     {
-      from: 'Via Roma 123, Milano',
-      to: 'Piazza Duomo, Milano',
-      duration: '32 min',
-      distance: '18.5 km',
-      date: '2025-10-09'
+      from: "Via Roma 123, Milano",
+      to: "Piazza Duomo, Milano",
+      duration: "32 min",
+      distance: "18.5 km",
+      date: "2025-10-09",
     },
     {
-      from: 'Corso Buenos Aires, Milano',
-      to: 'Navigli District, Milano',
-      duration: '25 min',
-      distance: '12.3 km',
-      date: '2025-10-08'
+      from: "Corso Buenos Aires, Milano",
+      to: "Navigli District, Milano",
+      duration: "25 min",
+      distance: "12.3 km",
+      date: "2025-10-08",
     },
     {
-      from: 'Milano Centrale',
-      to: 'Aeroporto Malpensa',
-      duration: '48 min',
-      distance: '45.2 km',
-      date: '2025-10-07'
-    }
+      from: "Milano Centrale",
+      to: "Aeroporto Malpensa",
+      duration: "48 min",
+      distance: "45.2 km",
+      date: "2025-10-07",
+    },
   ]);
-  const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   const [isDarkMap, setIsDarkMap] = useState(false);
 
+  // Per impostare la route selezionata quando si torna da History
+  const { setSelectedRoute } = useNavigation();
+
   useEffect(() => {
-    if (currentScreen === 'splash') {
+    if (currentScreen === "splash") {
       const timer = setTimeout(() => {
-        setCurrentScreen('home');
+        setCurrentScreen("home");
       }, 2000);
       return () => clearTimeout(timer);
     }
   }, [currentScreen]);
 
   const handleSendToHelmet = (route: Route) => {
-    if (!routes.find(r => r.from === route.from && r.to === route.to && r.date === route.date)) {
+    if (
+      !routes.find(
+        (r) =>
+          r.from === route.from && r.to === route.to && r.date === route.date
+      )
+    ) {
       setRoutes([route, ...routes]);
     }
   };
@@ -66,22 +77,22 @@ function App() {
   };
 
   const handleReviewRoute = (route: Route) => {
-    setSelectedRoute(route);
-    setCurrentScreen('home');
+    setSelectedRoute(route); // aggiorna il context
+    setCurrentScreen("home");
   };
 
   const pageVariants = {
     initial: { opacity: 0, x: 20 },
     animate: { opacity: 1, x: 0 },
-    exit: { opacity: 0, x: -20 }
+    exit: { opacity: 0, x: -20 },
   };
 
   return (
     <div className="relative w-full h-screen bg-white overflow-hidden">
       <Toaster />
-      
+
       <AnimatePresence mode="wait">
-        {currentScreen === 'splash' && (
+        {currentScreen === "splash" && (
           <motion.div
             key="splash"
             initial={{ opacity: 0 }}
@@ -93,7 +104,7 @@ function App() {
           </motion.div>
         )}
 
-        {currentScreen === 'home' && (
+        {currentScreen === "home" && (
           <motion.div
             key="home"
             variants={pageVariants}
@@ -103,16 +114,15 @@ function App() {
             transition={{ duration: 0.3 }}
             className="h-full"
           >
-            <Home 
+            <Home
               isBluetoothConnected={isBluetoothConnected}
               onSendToHelmet={handleSendToHelmet}
-              preloadedRoute={selectedRoute}
               isDarkMap={isDarkMap}
             />
           </motion.div>
         )}
 
-        {currentScreen === 'history' && (
+        {currentScreen === "history" && (
           <motion.div
             key="history"
             variants={pageVariants}
@@ -122,15 +132,16 @@ function App() {
             transition={{ duration: 0.3 }}
             className="h-full"
           >
-            <History 
+            <History
               routes={routes}
               onDeleteRoute={handleDeleteRoute}
               onReviewRoute={handleReviewRoute}
+              isBluetoothConnected={isBluetoothConnected} // <--- aggiungi questa
             />
           </motion.div>
         )}
 
-        {currentScreen === 'settings' && (
+        {currentScreen === "settings" && (
           <motion.div
             key="settings"
             variants={pageVariants}
@@ -140,7 +151,7 @@ function App() {
             transition={{ duration: 0.3 }}
             className="h-full"
           >
-            <Settings 
+            <Settings
               isBluetoothConnected={isBluetoothConnected}
               onToggleBluetooth={setIsBluetoothConnected}
               isDarkMap={isDarkMap}
@@ -150,10 +161,18 @@ function App() {
         )}
       </AnimatePresence>
 
-      {currentScreen !== 'splash' && (
+      {currentScreen !== "splash" && (
         <Navbar currentScreen={currentScreen} onNavigate={setCurrentScreen} />
       )}
     </div>
+  );
+}
+
+function App() {
+  return (
+    <NavigationProvider>
+      <AppContent />
+    </NavigationProvider>
   );
 }
 

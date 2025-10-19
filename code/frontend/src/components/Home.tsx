@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import Map, { Marker, Source, Layer } from "react-map-gl/maplibre";
+import { useNavigation } from "./NavigationContext";
+
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   MapPin,
@@ -17,60 +19,50 @@ import type { Route } from "../App";
 interface HomeProps {
   isBluetoothConnected: boolean;
   onSendToHelmet: (route: Route) => void;
-  preloadedRoute: Route | null;
   isDarkMap: boolean;
 }
 
 export function Home({
   isBluetoothConnected,
   onSendToHelmet,
-  preloadedRoute,
   isDarkMap,
 }: HomeProps) {
-  const [from, setFrom] = useState("Rilevamento posizione...");
-  const [to, setTo] = useState("");
-  const [routeInfo, setRouteInfo] = useState({ duration: "—", distance: "—" });
-  const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
-  const [currentInstruction, setCurrentInstruction] = useState<string | null>(
-    null
-  );
   const [isSending, setIsSending] = useState(false);
-  const [currentPosition, setCurrentPosition] = useState<
-    [number, number] | null
-  >(null);
-  const [completedPath, setCompletedPath] = useState<[number, number][]>([]);
-  const [autoFrom, setAutoFrom] = useState<[number, number] | null>(null);
+  const {
+    currentPosition,
+    setCurrentPosition,
+    from,
+    setFrom,
+    to,
+    setTo,
+    routeCoords,
+    setRouteCoords,
+    completedPath,
+    setCompletedPath,
+    currentInstruction,
+    setCurrentInstruction,
+    routeInfo,
+    setRouteInfo,
+    autoFrom,
+    setAutoFrom,
+  } = useNavigation();
+
   const [routeFetched, setRouteFetched] = useState(false);
   const mapRef = useRef<any>(null);
   const lastIndexRef = useRef(0); // Stabilizza progresso
 
-  
-  // Ripulisce percorso o forza refetch quando cambia la destinazione
+  // Ripulisce percorso solo se la destinazione viene cancellata
   useEffect(() => {
     if (!to) {
-      // Se la destinazione è stata cancellata, svuota tutto
       setRouteCoords([]);
       setRouteInfo({ duration: "—", distance: "—" });
       setCompletedPath([]);
       setRouteFetched(false);
       lastIndexRef.current = 0;
-    } else {
-      // Se è cambiata la destinazione, prepara un nuovo fetch
-      setRouteFetched(false);
+    } else if (!routeFetched) {
+      setRouteFetched(false); // forza fetch se non già fatto
     }
   }, [to]);
-
-  // Carica percorso preimpostato
-  useEffect(() => {
-    if (preloadedRoute) {
-      setFrom(preloadedRoute.from);
-      setTo(preloadedRoute.to);
-      setRouteInfo({
-        duration: preloadedRoute.duration,
-        distance: preloadedRoute.distance,
-      });
-    }
-  }, [preloadedRoute]);
 
   // Fetch route quando GPS ha rilevato posizione e c'è destinazione
   useEffect(() => {
@@ -116,7 +108,7 @@ export function Home({
     return () => controller.abort();
   }, [autoFrom, to, routeFetched]);
 
-  // Gestione posizione GPS migliorata
+  // Gestione posizione GPS
   useEffect(() => {
     if (!navigator.geolocation) {
       toast.error("Il tuo dispositivo non supporta il GPS");
@@ -176,7 +168,6 @@ export function Home({
             }
           });
 
-          // Aggiorna solo se vicino alla rotta e in avanti
           if (nearestIndex !== -1 && minDist < 40) {
             if (nearestIndex > lastIndexRef.current) {
               lastIndexRef.current = nearestIndex;
@@ -332,9 +323,7 @@ export function Home({
               key="gps-marker"
             >
               <div className="relative flex items-center justify-center">
-                {/* alone sfumato */}
                 <div className="absolute w-4 h-4 bg-[#E85A2A]/25 rounded-full blur-md animate-pulse" />
-                {/* punto centrale */}
                 <div className="w-8 h-8 bg-[#E85A2A] border-[3px] border-white rounded-full shadow-lg" />
               </div>
             </Marker>
@@ -398,7 +387,9 @@ export function Home({
       <div className="px-6 mt-auto mb-4">
         <Button
           onClick={handleSend}
-          disabled={isSending || !to || !autoFrom}
+          disabled={
+            isSending || !to || !autoFrom || currentInstruction !== null
+          }
           className="w-full h-14 rounded-2xl bg-[#E85A2A] hover:bg-[#d14f23] text-white flex items-center justify-center gap-2"
         >
           <LocateFixed size={18} />
