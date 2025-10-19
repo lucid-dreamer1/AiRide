@@ -1,13 +1,12 @@
 import { useState, useEffect, useRef } from "react";
 import Map, { Marker, Source, Layer } from "react-map-gl/maplibre";
-
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   MapPin,
   Navigation,
+  LocateFixed,
   Bluetooth,
   BluetoothOff,
-  LocateFixed,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -28,7 +27,7 @@ export function Home({
   preloadedRoute,
   isDarkMap,
 }: HomeProps) {
-  const [from, setFrom] = useState("");
+  const [from, setFrom] = useState("Rilevamento posizione...");
   const [to, setTo] = useState("");
   const [routeInfo, setRouteInfo] = useState({ duration: "—", distance: "—" });
   const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
@@ -40,9 +39,28 @@ export function Home({
     [number, number] | null
   >(null);
   const [completedPath, setCompletedPath] = useState<[number, number][]>([]);
+  const [autoFrom, setAutoFrom] = useState<[number, number] | null>(null);
+  const [routeFetched, setRouteFetched] = useState(false);
   const mapRef = useRef<any>(null);
+  const lastIndexRef = useRef(0); // Stabilizza progresso
 
-  // Carica route pre-caricata
+  
+  // Ripulisce percorso o forza refetch quando cambia la destinazione
+  useEffect(() => {
+    if (!to) {
+      // Se la destinazione è stata cancellata, svuota tutto
+      setRouteCoords([]);
+      setRouteInfo({ duration: "—", distance: "—" });
+      setCompletedPath([]);
+      setRouteFetched(false);
+      lastIndexRef.current = 0;
+    } else {
+      // Se è cambiata la destinazione, prepara un nuovo fetch
+      setRouteFetched(false);
+    }
+  }, [to]);
+
+  // Carica percorso preimpostato
   useEffect(() => {
     if (preloadedRoute) {
       setFrom(preloadedRoute.from);
@@ -54,22 +72,25 @@ export function Home({
     }
   }, [preloadedRoute]);
 
-  // Ottieni info percorso dal backend
-  // Ottieni info percorso dal backend
+  // Fetch route quando GPS ha rilevato posizione e c'è destinazione
   useEffect(() => {
-    if (!from || !to) return;
+    if (!autoFrom || !to) return;
+    if (routeFetched) return;
+
+    const realFrom = `${autoFrom[0]},${autoFrom[1]}`;
     const controller = new AbortController();
 
     async function fetchRoute() {
       try {
-        const res = await fetch(`/route_info?start=${encodeURIComponent(from)}&end=${encodeURIComponent(to)}`)
-;
-
+        const res = await fetch(
+          `/route_info?start=${encodeURIComponent(
+            realFrom
+          )}&end=${encodeURIComponent(to)}`,
+          { signal: controller.signal }
+        );
         const data = await res.json();
-
         if (res.ok) {
           setRouteInfo({ duration: data.duration, distance: data.distance });
-
           if (data.coordinates && data.coordinates.length > 0) {
             const coords = data.coordinates.map(
               (p: { lat: number; lon: number }) =>
@@ -79,6 +100,7 @@ export function Home({
           } else {
             setRouteCoords([]);
           }
+          setRouteFetched(true);
         } else {
           toast.error(data.error || "Errore ottenendo percorso");
           setRouteCoords([]);
@@ -92,9 +114,9 @@ export function Home({
 
     fetchRoute();
     return () => controller.abort();
-  }, [from, to]);
+  }, [autoFrom, to, routeFetched]);
 
-  // 🔹 Gestione GPS Reale
+  // Gestione posizione GPS migliorata
   useEffect(() => {
     if (!navigator.geolocation) {
       toast.error("Il tuo dispositivo non supporta il GPS");
@@ -102,14 +124,18 @@ export function Home({
     }
 
     const watchId = navigator.geolocation.watchPosition(
-      async (pos) => {
+      (pos) => {
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
 
         setCurrentPosition([lat, lon]);
         updatePosition(lat, lon);
 
-        // Centra la mappa sulla posizione reale
+        if (!autoFrom) setAutoFrom([lat, lon]);
+        if (from === "Rilevamento posizione..." || from === "")
+          setFrom("La tua posizione attuale");
+
+        // Centra mappa su posizione corrente
         if (mapRef.current?.getMap) {
           mapRef.current.getMap().flyTo({
             center: [lon, lat],
@@ -119,17 +145,47 @@ export function Home({
           });
         }
 
-        // Aggiorna percorso completato se sei vicino a un punto del tragitto
+        // Aggiorna percorso completato con distanza Haversine
         if (routeCoords.length > 0) {
-          const nearest = routeCoords.find(
-            ([rLat, rLon]) =>
-              Math.abs(rLat - lat) < 0.0005 && Math.abs(rLon - lon) < 0.0005
-          );
-          if (nearest) {
-            const index = routeCoords.indexOf(nearest);
-            setCompletedPath(
-              routeCoords.slice(0, index + 1).map(([lat, lon]) => [lon, lat])
-            );
+          function haversine(
+            lat1: number,
+            lon1: number,
+            lat2: number,
+            lon2: number
+          ) {
+            const R = 6371e3;
+            const φ1 = (lat1 * Math.PI) / 180;
+            const φ2 = (lat2 * Math.PI) / 180;
+            const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+            const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+            const a =
+              Math.sin(Δφ / 2) ** 2 +
+              Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+          }
+
+          let minDist = Infinity;
+          let nearestIndex = -1;
+
+          routeCoords.forEach(([rLat, rLon], i) => {
+            const d = haversine(lat, lon, rLat, rLon);
+            if (d < minDist) {
+              minDist = d;
+              nearestIndex = i;
+            }
+          });
+
+          // Aggiorna solo se vicino alla rotta e in avanti
+          if (nearestIndex !== -1 && minDist < 40) {
+            if (nearestIndex > lastIndexRef.current) {
+              lastIndexRef.current = nearestIndex;
+              setCompletedPath(
+                routeCoords
+                  .slice(0, nearestIndex + 1)
+                  .map(([lat, lon]) => [lon, lat])
+              );
+            }
           }
         }
       },
@@ -141,16 +197,18 @@ export function Home({
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [routeCoords]);
+  }, [routeCoords, from, autoFrom]);
 
-  // 🔹 Avvia navigazione e ricevi istruzioni
+  // Invia percorso al casco
   const handleSend = () => {
-    if (!from || !to) return toast.error("Inserisci partenza e destinazione");
+    if (!to) return toast.error("Inserisci destinazione");
     if (!isBluetoothConnected) return toast.error("Bluetooth non connesso");
+    if (!autoFrom) return toast.error("Posizione GPS non disponibile");
 
     setIsSending(true);
+    const realFrom = `${autoFrom[0]},${autoFrom[1]}`;
     const route: Route = {
-      from,
+      from: realFrom,
       to,
       duration: routeInfo.duration,
       distance: routeInfo.distance,
@@ -163,7 +221,7 @@ export function Home({
     });
 
     const eventSource = startRouteStream(
-      from,
+      realFrom,
       to,
       (data) => {
         if (data.testo) setCurrentInstruction(data.testo);
@@ -222,16 +280,11 @@ export function Home({
       >
         <Map
           ref={mapRef}
-          initialViewState={{
-            longitude: 12.4964,
-            latitude: 41.9028,
-            zoom: 13,
-          }}
+          initialViewState={{ longitude: 12.4964, latitude: 41.9028, zoom: 13 }}
           style={{ width: "100%", height: "100%" }}
           mapStyle={isDarkMap ? MAP_STYLE_DARK : MAP_STYLE_LIGHT}
           mapLib={import("maplibre-gl")}
         >
-          {/* Linea del percorso */}
           {routeCoords.length > 0 && (
             <Source
               id="route"
@@ -248,15 +301,11 @@ export function Home({
               <Layer
                 id="route-line"
                 type="line"
-                paint={{
-                  "line-color": "#E85A2A",
-                  "line-width": 4,
-                }}
+                paint={{ "line-color": "#E85A2A", "line-width": 4 }}
               />
             </Source>
           )}
 
-          {/* Linea percorso completato */}
           {completedPath.length > 0 && (
             <Source
               id="completed-path"
@@ -264,21 +313,17 @@ export function Home({
               data={{
                 type: "Feature",
                 geometry: { type: "LineString", coordinates: completedPath },
-                properties: {}, // ✅ aggiungi questa riga
+                properties: {},
               }}
             >
               <Layer
                 id="completed-line"
                 type="line"
-                paint={{
-                  "line-color": "#999999",
-                  "line-width": 4,
-                }}
+                paint={{ "line-color": "#999999", "line-width": 4 }}
               />
             </Source>
           )}
 
-          {/* Marker dinamico posizione reale */}
           {currentPosition && (
             <Marker
               longitude={currentPosition[1]}
@@ -286,13 +331,18 @@ export function Home({
               anchor="center"
               key="gps-marker"
             >
-              <div className="w-5 h-5 bg-[#E85A2A] border-2 border-white rounded-full shadow-lg animate-pulse" />
+              <div className="relative flex items-center justify-center">
+                {/* alone sfumato */}
+                <div className="absolute w-4 h-4 bg-[#E85A2A]/25 rounded-full blur-md animate-pulse" />
+                {/* punto centrale */}
+                <div className="w-8 h-8 bg-[#E85A2A] border-[3px] border-white rounded-full shadow-lg" />
+              </div>
             </Marker>
           )}
         </Map>
       </div>
 
-      {/* Input partenza/destinazione */}
+      {/* Input partenza e destinazione */}
       <div className="px-6 mt-6 space-y-3">
         <div className="relative">
           <MapPin
@@ -302,8 +352,8 @@ export function Home({
           <Input
             placeholder="Partenza"
             value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            className="pl-12 h-14 rounded-2xl border-2 border-gray-200 focus:border-[#E85A2A]"
+            disabled
+            className="pl-12 h-14 rounded-2xl border-2 border-gray-200 bg-gray-100 text-gray-700"
             style={{ fontFamily: "Inter, sans-serif" }}
           />
         </div>
@@ -344,11 +394,11 @@ export function Home({
         </div>
       )}
 
-      {/* Bottone */}
+      {/* Bottone invio */}
       <div className="px-6 mt-auto mb-4">
         <Button
           onClick={handleSend}
-          disabled={isSending || !from || !to}
+          disabled={isSending || !to || !autoFrom}
           className="w-full h-14 rounded-2xl bg-[#E85A2A] hover:bg-[#d14f23] text-white flex items-center justify-center gap-2"
         >
           <LocateFixed size={18} />
