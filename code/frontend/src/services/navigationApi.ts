@@ -1,4 +1,4 @@
-// Usa il link ngrok del tuo backend qui
+// navigationApi.ts
 const BASE_URL = "https://unmouldering-eliana-unreclaimed.ngrok-free.dev";
 
 // Invio della posizione corrente

@@ -1,0 +1,40 @@
+String inputString = "";
+bool stringComplete = false;
+
+void setup() {
+  Serial.begin(9600);
+  inputString.reserve(200);
+}
+
+void loop() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n') {
+      stringComplete = true;
+      break;
+    } else {
+      inputString += c;
+    }
+  }
+
+  if (stringComplete) {
+    Serial.print("Messaggio ricevuto: ");
+    Serial.println(inputString);
+
+    int metriIndex = inputString.indexOf("Metri:");
+    int frecciaIndex = inputString.indexOf("Freccia:");
+    
+    if (metriIndex != -1 && frecciaIndex != -1) {
+      String testo = inputString.substring(0, metriIndex - 1);
+      String metri = inputString.substring(metriIndex + 6, frecciaIndex - 2);
+      String freccia = inputString.substring(frecciaIndex + 8);
+
+      Serial.print("Testo: "); Serial.println(testo);
+      Serial.print("Metri: "); Serial.println(metri);
+      Serial.print("Freccia: "); Serial.println(freccia);
+    }
+
+    inputString = "";
+    stringComplete = false;
+  }
+}

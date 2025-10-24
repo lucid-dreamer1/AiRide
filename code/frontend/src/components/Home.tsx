@@ -1,7 +1,7 @@
+// Home.tsx
 import { useState, useEffect, useRef } from "react";
 import Map, { Marker, Source, Layer } from "react-map-gl/maplibre";
 import { useNavigation } from "./NavigationContext";
-
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   MapPin,
@@ -15,6 +15,7 @@ import { Input } from "./ui/input";
 import { toast } from "sonner";
 import { startRouteStream, updatePosition } from "../services/navigationApi";
 import type { Route } from "../App";
+import { connectSerial, sendSerialMessage } from "../services/serialService";
 
 interface HomeProps {
   isBluetoothConnected: boolean;
@@ -22,12 +23,18 @@ interface HomeProps {
   isDarkMap: boolean;
 }
 
+// ------------------- CONFIGURAZIONE -------------------
+const USE_MOCK_SERIAL = true; // true = simulazione console, false = invio reale USB
+// --------------------------------------------------------
+
 export function Home({
   isBluetoothConnected,
   onSendToHelmet,
   isDarkMap,
 }: HomeProps) {
   const [isSending, setIsSending] = useState(false);
+  const [isSerialConnected, setIsSerialConnected] = useState(false);
+
   const {
     currentPosition,
     setCurrentPosition,
@@ -50,13 +57,10 @@ export function Home({
   const [routeFetched, setRouteFetched] = useState(false);
   const mapRef = useRef<any>(null);
   const lastIndexRef = useRef(0);
-
-  // --- Refs per calcolo velocità e durata iniziale ---
   const lastPositionRef = useRef<[number, number] | null>(null);
   const lastTimeRef = useRef<number | null>(null);
-  const initialDurationRef = useRef<string>("—"); // <-- durata iniziale
+  const initialDurationRef = useRef<string>("—");
 
-  // Ripulisce percorso solo se la destinazione viene cancellata
   useEffect(() => {
     if (!to) {
       setRouteCoords([]);
@@ -70,30 +74,25 @@ export function Home({
     }
   }, [to]);
 
-  // Fetch route
   useEffect(() => {
     if (!autoFrom || !to) return;
     if (routeFetched) return;
-
     const realFrom = `${autoFrom[0]},${autoFrom[1]}`;
     const controller = new AbortController();
 
     async function fetchRoute() {
       try {
         const res = await fetch(
-          `/route_info?start=${encodeURIComponent(
-            realFrom
-          )}&end=${encodeURIComponent(to)}`,
+          `/route_info?start=${encodeURIComponent(realFrom)}&end=${encodeURIComponent(to)}`,
           { signal: controller.signal }
         );
         const data = await res.json();
         if (res.ok) {
           setRouteInfo({ duration: data.duration, distance: data.distance });
-          if (data.duration) initialDurationRef.current = data.duration; // <-- salva durata iniziale
+          if (data.duration) initialDurationRef.current = data.duration;
           if (data.coordinates && data.coordinates.length > 0) {
             const coords = data.coordinates.map(
-              (p: { lat: number; lon: number }) =>
-                [p.lat, p.lon] as [number, number]
+              (p: { lat: number; lon: number }) => [p.lat, p.lon] as [number, number]
             );
             setRouteCoords(coords);
           } else {
@@ -115,7 +114,6 @@ export function Home({
     return () => controller.abort();
   }, [autoFrom, to, routeFetched]);
 
-  // --- Funzione Haversine ---
   function haversine(lat1: number, lon1: number, lat2: number, lon2: number) {
     const R = 6371e3;
     const φ1 = (lat1 * Math.PI) / 180;
@@ -129,46 +127,40 @@ export function Home({
     return R * c;
   }
 
-  // --- Calcolo distanza residua ---
-  function computeRemainingDistance(
-    currentPos: [number, number],
-    route: [number, number][]
-  ) {
+  function computeRemainingDistance(currentPos: [number, number], route: [number, number][]) {
     let distance = 0;
     let startAdding = false;
-
     for (let i = 0; i < route.length - 1; i++) {
       const [lat1, lon1] = route[i];
       const [lat2, lon2] = route[i + 1];
-
       if (!startAdding) {
         const d = haversine(currentPos[0], currentPos[1], lat1, lon1);
         if (d < 40) startAdding = true;
       }
-
       if (startAdding) {
         distance += haversine(lat1, lon1, lat2, lon2);
       }
     }
-
-    return distance; // metri
+    return distance;
   }
 
-  // Gestione posizione GPS
+  function computeDistanceToNextStep(currentPos: [number, number], route: [number, number][], nextIndex: number) {
+    if (nextIndex >= route.length - 1) return 0;
+    const [lat1, lon1] = route[nextIndex];
+    return Math.round(haversine(currentPos[0], currentPos[1], lat1, lon1));
+  }
+
   useEffect(() => {
     if (!navigator.geolocation) {
       toast.error("Il tuo dispositivo non supporta il GPS");
       return;
     }
-
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
-
         setCurrentPosition([lat, lon]);
         updatePosition(lat, lon);
-
         if (!autoFrom) setAutoFrom([lat, lon]);
         if (from === "Rilevamento posizione..." || from === "")
           setFrom("La tua posizione attuale");
@@ -183,33 +175,23 @@ export function Home({
         }
 
         if (routeCoords.length > 0) {
-          const remainingDistance = computeRemainingDistance(
-            [lat, lon],
-            routeCoords
-          );
-
+          const remainingDistance = computeRemainingDistance([lat, lon], routeCoords);
           const now = Date.now();
           let speed = 0;
-
           if (lastPositionRef.current && lastTimeRef.current) {
             const [latPrev, lonPrev] = lastPositionRef.current;
             const deltaT = (now - lastTimeRef.current) / 1000;
             const deltaD = haversine(latPrev, lonPrev, lat, lon);
             speed = deltaD / deltaT;
           }
-
           lastPositionRef.current = [lat, lon];
           lastTimeRef.current = now;
-
-          const MIN_SPEED = 0.5; // m/s ≈ 1.8 km/h
-          let remainingDuration = initialDurationRef.current; // durata iniziale
-
-          // Aggiorna durata solo se la velocità è sufficiente
+          const MIN_SPEED = 0.5;
+          let remainingDuration = initialDurationRef.current;
           if (speed >= MIN_SPEED) {
             const minutes = Math.round(remainingDistance / speed / 60);
             remainingDuration = `${minutes} min`;
           }
-
           setRouteInfo({
             distance: `${(remainingDistance / 1000).toFixed(2)} km`,
             duration: remainingDuration,
@@ -222,11 +204,19 @@ export function Home({
       },
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 5000 }
     );
-
     return () => navigator.geolocation.clearWatch(watchId);
   }, [routeCoords, from, autoFrom]);
 
-  // Invia percorso al casco
+  const handleConnectSerial = async () => {
+    const ok = await connectSerial();
+    if (ok) {
+      setIsSerialConnected(true);
+      toast.success("Arduino connesso via USB!");
+    } else {
+      toast.error("Connessione seriale fallita");
+    }
+  };
+
   const handleSend = () => {
     if (!to) return toast.error("Inserisci destinazione");
     if (!isBluetoothConnected) return toast.error("Bluetooth non connesso");
@@ -242,7 +232,6 @@ export function Home({
       date: new Date().toISOString().split("T")[0],
     };
     onSendToHelmet(route);
-
     toast.success("Percorso inviato al casco!", {
       description: "Le indicazioni appariranno sul display del casco",
     });
@@ -250,8 +239,16 @@ export function Home({
     const eventSource = startRouteStream(
       realFrom,
       to,
-      (data) => {
+      async (data) => {
         if (data.testo) setCurrentInstruction(data.testo);
+        const metri = data.metri ?? computeDistanceToNextStep(currentPosition!, routeCoords, lastIndexRef.current);
+        const message = `Indicazione: ${data.testo} | Metri: ${metri} m`;
+
+        if (USE_MOCK_SERIAL) {
+          console.log("Simulato invio seriale:", message);
+        } else if (isSerialConnected) {
+          await sendSerialMessage(message);
+        }
       },
       () => {
         toast.success("Percorso completato 🎉");
@@ -263,10 +260,9 @@ export function Home({
     return () => eventSource.close();
   };
 
-  const MAP_STYLE_LIGHT =
-    "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
-  const MAP_STYLE_DARK =
-    "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+  const MAP_STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+  const MAP_STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
   return (
     <div className="h-full flex flex-col pb-20">
       {/* Header */}
@@ -278,20 +274,14 @@ export function Home({
           {isBluetoothConnected ? (
             <>
               <Bluetooth size={20} className="text-[#E85A2A]" />
-              <span
-                className="text-sm text-gray-600"
-                style={{ fontFamily: "Inter, sans-serif" }}
-              >
+              <span className="text-sm text-gray-600" style={{ fontFamily: "Inter, sans-serif" }}>
                 Connesso
               </span>
             </>
           ) : (
             <>
               <BluetoothOff size={20} className="text-gray-400" />
-              <span
-                className="text-sm text-gray-400"
-                style={{ fontFamily: "Inter, sans-serif" }}
-              >
+              <span className="text-sm text-gray-400" style={{ fontFamily: "Inter, sans-serif" }}>
                 Non connesso
               </span>
             </>
@@ -300,10 +290,7 @@ export function Home({
       </div>
 
       {/* Mappa */}
-      <div
-        className="mx-6 rounded-3xl overflow-hidden"
-        style={{ height: "280px", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}
-      >
+      <div className="mx-6 rounded-3xl overflow-hidden" style={{ height: "280px", boxShadow: "0 8px 24px rgba(0,0,0,0.12)" }}>
         <Map
           ref={mapRef}
           initialViewState={{ longitude: 12.4964, latitude: 41.9028, zoom: 13 }}
@@ -351,12 +338,7 @@ export function Home({
           )}
 
           {currentPosition && (
-            <Marker
-              longitude={currentPosition[1]}
-              latitude={currentPosition[0]}
-              anchor="center"
-              key="gps-marker"
-            >
+            <Marker longitude={currentPosition[1]} latitude={currentPosition[0]} anchor="center" key="gps-marker">
               <div className="relative flex items-center justify-center">
                 <div className="absolute w-4 h-4 bg-[#E85A2A]/25 rounded-full blur-md animate-pulse" />
                 <div className="w-8 h-8 bg-[#E85A2A] border-[3px] border-white rounded-full shadow-lg" />
@@ -369,10 +351,7 @@ export function Home({
       {/* Input partenza e destinazione */}
       <div className="px-6 mt-6 space-y-3">
         <div className="relative">
-          <MapPin
-            size={20}
-            className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400"
-          />
+          <MapPin size={20} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
           <Input
             placeholder="Partenza"
             value={from}
@@ -382,10 +361,7 @@ export function Home({
           />
         </div>
         <div className="relative">
-          <Navigation
-            size={20}
-            className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400"
-          />
+          <Navigation size={20} className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400" />
           <Input
             placeholder="Destinazione"
             value={to}
@@ -418,17 +394,25 @@ export function Home({
         </div>
       )}
 
+      {/* Pulsante connessione seriale */}
+      <div className="px-6 mt-4">
+        <Button
+          onClick={handleConnectSerial}
+          disabled={isSerialConnected}
+          className="w-full h-14 rounded-2xl bg-gray-200 hover:bg-gray-300 text-black mb-3"
+        >
+          {isSerialConnected ? "Arduino connesso ✅" : "Connetti Arduino via USB"}
+        </Button>
+      </div>
+
       {/* Bottone invio */}
       <div className="px-6 mt-auto mb-4">
         <Button
           onClick={handleSend}
-          disabled={
-            isSending || !to || !autoFrom || currentInstruction !== null
-          }
+          disabled={isSending || !to || !autoFrom || currentInstruction !== null}
           className="w-full h-14 rounded-2xl bg-[#E85A2A] hover:bg-[#d14f23] text-white flex items-center justify-center gap-2"
         >
-          <LocateFixed size={18} />
-          Invia a casco
+          <LocateFixed size={18} /> Invia a casco
         </Button>
       </div>
     </div>
